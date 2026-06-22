@@ -148,7 +148,7 @@ async function handleNpmMetadata(packageName: string, res: Response): Promise<vo
     const tarballUrl: string = dist.tarball || '';
     const filename = tarballUrl.split('/').pop() || `${sanitizePath(packageName)}-${version}.tgz`;
     const cachePath = cache.getNpmCachePath(packageName, version, filename);
-    metadata.addVersion(pkgId, version, 0, cachePath, dist.shasum);
+    metadata.registerVersion(pkgId, version, 0, cachePath, dist.shasum, false);
   }
 
   res.json(pkgData);
@@ -172,7 +172,7 @@ async function handleNpmTarball(packageName: string, filename: string, res: Resp
     const pkg = metadata.getPackage(packageName, 'npm');
     const pkgId = pkg ? metadata.getOrCreatePackage(packageName, 'npm', 'cache') : 0;
     if (pkg && version) {
-      metadata.incrementVersionDownload(pkgId, version);
+      metadata.recordDownload(pkgId, version);
     }
     const fileSize = cache.getFileSize(cachePath);
     res.setHeader('Content-Length', fileSize.toString());
@@ -194,8 +194,8 @@ async function handleNpmTarball(packageName: string, filename: string, res: Resp
   if (cachePath && version) {
     cache.writeFile(cachePath, response.body);
     const pkgId = metadata.getOrCreatePackage(packageName, 'npm', 'cache', scope);
-    metadata.addVersion(pkgId, version, response.body.length, cachePath);
-    metadata.incrementVersionDownload(pkgId, version);
+    metadata.registerVersion(pkgId, version, response.body.length, cachePath, undefined, true);
+    metadata.recordDownload(pkgId, version);
   }
 
   res.setHeader('Content-Length', response.body.length.toString());
@@ -316,7 +316,7 @@ function handlePrivateNpmTarball(packageName: string, filename: string, res: Res
   const pkg = metadata.getPackage(packageName, 'npm');
   const pkgId = pkg ? metadata.getOrCreatePackage(packageName, 'npm', 'private', pkg.scope) : 0;
   if (pkg && version) {
-    metadata.incrementVersionDownload(pkgId, version);
+    metadata.recordDownload(pkgId, version);
   }
 
   const fileSize = cache.getFileSize(filePath);
@@ -378,7 +378,7 @@ async function handlePublishNpmPackage(packageName: string, req: Request, res: R
     source: 'private',
     scope,
   });
-  metadata.addVersion(pkgId, version, tarballBuffer.length, filePath, sha1);
+  metadata.registerVersion(pkgId, version, tarballBuffer.length, filePath, sha1, true);
 
   res.json({
     ok: true,

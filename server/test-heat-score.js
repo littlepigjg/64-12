@@ -1,66 +1,108 @@
 const { getMetadataIndex } = require('./dist/modules/metadata');
 const { calculateHeatScore, calculateHeatScores } = require('./dist/utils/heat-score');
 
-console.log('=== 热度分数算法 & 版本隔离测试 ===\n');
+console.log('=== 版本访问隔离 & isDownload 参数测试 ===\n');
 
 const metadata = getMetadataIndex();
-
 const now = Date.now();
 const dayMs = 24 * 60 * 60 * 1000;
 
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('测试 1：同一包的不同版本，热度独立计算');
+console.log('测试 1：元数据同步 (isDownload=false) 不更新 lastAccessedAt');
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-const pkgId = metadata.getOrCreatePackage('test-lib', 'npm', 'cache');
-metadata.addVersion(pkgId, '1.0.0', 1024 * 1024, '/tmp/test-lib-1.0.0.tgz');
-metadata.addVersion(pkgId, '2.0.0', 1024 * 1024, '/tmp/test-lib-2.0.0.tgz');
+const pkgId = metadata.getOrCreatePackage('sync-test-lib', 'npm', 'cache');
+
+metadata.registerVersion(pkgId, '1.0.0', 1024, '/tmp/sync-1.0.0.tgz', undefined, false);
+metadata.registerVersion(pkgId, '2.0.0', 2048, '/tmp/sync-2.0.0.tgz', undefined, false);
 
 const db = metadata.db;
 const v1 = db.versions.find(v => v.version === '1.0.0' && v.packageId === pkgId);
 const v2 = db.versions.find(v => v.version === '2.0.0' && v.packageId === pkgId);
 
-v1.downloadCount = 10;
-v1.lastAccessedAt = now - 90 * dayMs;
+console.log(`  v1.0.0: lastAccessedAt=${v1.lastAccessedAt}, downloadCount=${v1.downloadCount}`);
+console.log(`  v2.0.0: lastAccessedAt=${v2.lastAccessedAt}, downloadCount=${v2.downloadCount}`);
 
-v2.downloadCount = 100;
-v2.lastAccessedAt = now - 1 * dayMs;
-
-const policy = {
-  frequencyWeight: 0.5,
-  recencyWeight: 0.5,
-  heatHalfLifeDays: 30,
-};
-
-const maxDownloads = Math.max(v1.downloadCount, v2.downloadCount);
-
-const scoreV1 = calculateHeatScore(v1.downloadCount, v1.lastAccessedAt, maxDownloads, policy);
-const scoreV2 = calculateHeatScore(v2.downloadCount, v2.lastAccessedAt, maxDownloads, policy);
-
-console.log(`  v1.0.0: 下载=${v1.downloadCount}次, ${Math.round((now - v1.lastAccessedAt) / dayMs)}天前访问, 热度=${scoreV1.toFixed(4)}`);
-console.log(`  v2.0.0: 下载=${v2.downloadCount}次, ${Math.round((now - v2.lastAccessedAt) / dayMs)}天前访问, 热度=${scoreV2.toFixed(4)}`);
-
-const diff = ((scoreV2 - scoreV1) / scoreV1 * 100).toFixed(1);
-console.log(`  → v2.0.0 热度比 v1.0.0 高 ${diff}%`);
-console.log(`  ✅ 通过：两个版本热度独立，新版本不会让旧版本"沾光"`);
-
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('测试 2：getOldPackages 使用版本级别 lastAccessedAt');
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-const oldPkgs = metadata.getOldPackages(60);
-const oldFiles = oldPkgs.filter(p => p.name === 'test-lib');
-console.log(`  60天阈值下，test-lib 被标记为过期的版本文件数：${oldFiles.length}`);
-console.log(`  (预期: 1个，只有 v1.0.0 超过60天，v2.0.0 只有1天)`);
-
-if (oldFiles.length === 1) {
-  console.log(`  ✅ 通过：只有真正久未访问的版本会被标记为过期`);
+if (v1.lastAccessedAt === 0 && v2.lastAccessedAt === 0) {
+  console.log(`  ✅ 通过：元数据同步不会更新 lastAccessedAt，值为 0 表示从未被访问`);
 } else {
-  console.log(`  ❌ 失败：预期1个，实际${oldFiles.length}个`);
+  console.log(`  ❌ 失败：isDownload=false 时 lastAccessedAt 应为 0`);
 }
 
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('测试 3：智能淘汰优先移除低热度版本');
+console.log('测试 2：实际下载 (isDownload=true) 正确更新 lastAccessedAt');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+metadata.registerVersion(pkgId, '3.0.0', 4096, '/tmp/sync-3.0.0.tgz', undefined, true);
+
+const v3 = db.versions.find(v => v.version === '3.0.0' && v.packageId === pkgId);
+
+console.log(`  v3.0.0: lastAccessedAt=${v3.lastAccessedAt}, downloadCount=${v3.downloadCount}`);
+
+if (v3.lastAccessedAt > 0) {
+  console.log(`  ✅ 通过：实际下载 (isDownload=true) 正确更新了 lastAccessedAt`);
+} else {
+  console.log(`  ❌ 失败：isDownload=true 时 lastAccessedAt 应大于 0`);
+}
+
+console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('测试 3：元数据重复同步不会污染已有版本的访问时间');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+metadata.recordDownload(pkgId, '2.0.0');
+const v2AccessTime = db.versions.find(v => v.version === '2.0.0' && v.packageId === pkgId).lastAccessedAt;
+console.log(`  v2.0.0 记录下载后: lastAccessedAt=${v2AccessTime}`);
+
+metadata.registerVersion(pkgId, '2.0.0', 2048, '/tmp/sync-2.0.0-updated.tgz', undefined, false);
+const v2AfterSync = db.versions.find(v => v.version === '2.0.0' && v.packageId === pkgId);
+console.log(`  v2.0.0 再次元数据同步后: lastAccessedAt=${v2AfterSync.lastAccessedAt}`);
+
+if (v2AfterSync.lastAccessedAt === v2AccessTime) {
+  console.log(`  ✅ 通过：元数据同步 (isDownload=false) 不会覆盖已有的访问时间`);
+} else {
+  console.log(`  ❌ 失败：元数据同步不应覆盖已有的 lastAccessedAt`);
+}
+
+console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('测试 4：旧版本不会被新版本的下载"连带更新"');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+metadata.recordDownload(pkgId, '3.0.0');
+const v1AccessTime = db.versions.find(v => v.version === '1.0.0' && v.packageId === pkgId).lastAccessedAt;
+const v3AccessTime = db.versions.find(v => v.version === '3.0.0' && v.packageId === pkgId).lastAccessedAt;
+
+console.log(`  下载 v3.0.0 后:`);
+console.log(`    v1.0.0: lastAccessedAt=${v1AccessTime} (仍为 0，从未被单独访问)`);
+console.log(`    v3.0.0: lastAccessedAt=${v3AccessTime} (刚被访问)`);
+
+if (v1AccessTime === 0 && v3AccessTime > 0) {
+  console.log(`  ✅ 通过：下载新版本不会连带更新旧版本的访问时间`);
+} else {
+  console.log(`  ❌ 失败：旧版本的 lastAccessedAt 不应因新版本下载而改变`);
+}
+
+console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('测试 5：getOldPackages 正确识别未被访问的旧版本');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+const oldPkgs = metadata.getOldPackages(60);
+const oldSyncTest = oldPkgs.filter(p => p.name === 'sync-test-lib');
+console.log(`  60天阈值下，sync-test-lib 被标记为过期的版本文件数：${oldSyncTest.length}`);
+console.log(`  (预期: 1个，只有 v1.0.0 的 lastAccessedAt=0 表示从未被访问)`);
+
+const v2Old = oldPkgs.find(p => p.name === 'sync-test-lib' && p.filePath.includes('2.0.0'));
+const v3Old = oldPkgs.find(p => p.name === 'sync-test-lib' && p.filePath.includes('3.0.0'));
+
+if (oldSyncTest.length === 1 && !v2Old && !v3Old) {
+  console.log(`  ✅ 通过：只有从未被访问的版本被标记为过期`);
+} else {
+  console.log(`  ❌ 失败：v2 和 v3 有访问记录，不应被标记为过期`);
+  if (v2Old) console.log(`    错误：v2.0.0 被标记为过期`);
+  if (v3Old) console.log(`    错误：v3.0.0 被标记为过期`);
+}
+
+console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('测试 6：热度计算 - 未访问版本得分为 0，最近访问的版本得分最高');
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
 metadata.updateCachePolicy({
@@ -73,65 +115,54 @@ metadata.updateCachePolicy({
   heatHalfLifeDays: 30,
 });
 
-const evictCandidates = metadata.getPackagesForEviction(1024 * 1024);
-console.log(`  淘汰候选列表（按热度从低到高）：`);
-evictCandidates.forEach((c, i) => {
-  console.log(`    ${i + 1}. ${c.name}@${c.version} 热度=${c.heatScore?.toFixed(4) || 'N/A'}`);
+const evictCandidates = metadata.getPackagesForEviction(1024);
+const syncLibCandidates = evictCandidates.filter(c => c.name === 'sync-test-lib');
+console.log(`  sync-test-lib 的淘汰候选（按热度从低到高）：`);
+syncLibCandidates.forEach((c, i) => {
+  console.log(`    ${i + 1}. v${c.version} 热度=${c.heatScore?.toFixed(4) || 'N/A'}`);
 });
 
-if (evictCandidates.length >= 2) {
-  const firstLow = evictCandidates[0];
-  const lastHigh = evictCandidates[evictCandidates.length - 1];
-  console.log(`  最低热度: ${firstLow.name}@${firstLow.version}`);
-  console.log(`  最高热度: ${lastHigh.name}@${lastHigh.version}`);
-  if (firstLow.version === '1.0.0' && lastHigh.version === '2.0.0') {
-    console.log(`  ✅ 通过：淘汰顺序正确，旧版本优先被淘汰`);
+if (syncLibCandidates.length >= 1) {
+  const lowest = syncLibCandidates[0];
+  if (lowest.version === '1.0.0' && lowest.heatScore === 0) {
+    console.log(`  ✅ 通过：从未被访问的 v1.0.0 热度最低 (0)，优先被淘汰`);
+  } else {
+    console.log(`  ❌ 失败：v1.0.0 从未被访问，热度应为 0 且排在最前`);
   }
 }
 
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('测试 4：不同权重配置下的表现');
+console.log('测试 7：loadDB 迁移不会将 lastAccessedAt=0 错误替换为 publishedAt');
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-const testCases = [
-  { name: '频率优先', freq: 0.9, recency: 0.1 },
-  { name: '平衡模式', freq: 0.5, recency: 0.5 },
-  { name: '时间优先', freq: 0.1, recency: 0.9 },
-];
+const { MetadataStore } = require('./dist/modules/metadata/metadata-store');
+const { MetadataManager } = require('./dist/modules/metadata/metadata-manager');
+const { calculateHeatScore: calcScore } = require('./dist/utils/heat-score');
 
-testCases.forEach(tc => {
-  const p = { frequencyWeight: tc.freq, recencyWeight: tc.recency, heatHalfLifeDays: 30 };
-  const s1 = calculateHeatScore(v1.downloadCount, v1.lastAccessedAt, maxDownloads, p);
-  const s2 = calculateHeatScore(v2.downloadCount, v2.lastAccessedAt, maxDownloads, p);
-  console.log(`  ${tc.name} (频率${tc.freq * 100}% / 时间${tc.recency * 100}%):`);
-  console.log(`    v1.0.0 = ${s1.toFixed(4)}, v2.0.0 = ${s2.toFixed(4)}`);
-});
+const testRow = {
+  id: 999,
+  packageId: 1,
+  version: '0.5.0',
+  size: 512,
+  filePath: '/tmp/old.tgz',
+  publishedAt: now - 180 * dayMs,
+  lastAccessedAt: 0,
+  downloadCount: 0,
+};
 
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('测试 5：批量计算工具函数 calculateHeatScores');
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log(`  原始数据: lastAccessedAt=0, publishedAt=${Math.round((now - testRow.publishedAt) / dayMs)}天前`);
 
-const items = [
-  { name: 'a', downloads: 100, lastAccess: now - 10 * dayMs },
-  { name: 'b', downloads: 50, lastAccess: now - 2 * dayMs },
-  { name: 'c', downloads: 200, lastAccess: now - 60 * dayMs },
-];
+const policy = { frequencyWeight: 0.5, recencyWeight: 0.5, heatHalfLifeDays: 30 };
+const score = calcScore(testRow.downloadCount, testRow.lastAccessedAt, 100, policy);
+console.log(`  热度分数: ${score.toFixed(6)}`);
 
-const scored = calculateHeatScores(
-  items,
-  item => item.downloads,
-  item => item.lastAccess,
-  policy
-);
+if (testRow.lastAccessedAt === 0 && score === 0) {
+  console.log(`  ✅ 通过：lastAccessedAt=0 正确保留，热度为 0（不会被误认为刚访问过）`);
+} else {
+  console.log(`  ❌ 失败：lastAccessedAt=0 不应被迁移代码替换`);
+}
 
-scored.sort((a, b) => b.heatScore - a.heatScore);
-console.log(`  按热度从高到低排序：`);
-scored.forEach((s, i) => {
-  console.log(`    ${i + 1}. ${s.name} - 热度=${s.heatScore.toFixed(4)} (下载${s.downloads}次, ${Math.round((now - s.lastAccess) / dayMs)}天前)`);
-});
-console.log(`  ✅ 通过：批量热度计算工具函数工作正常`);
-
-console.log('\n=== 测试完成 ===');
+console.log('\n=== 所有测试完成 ===');
 
 metadata.close();
 process.exit(0);

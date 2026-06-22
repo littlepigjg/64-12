@@ -230,7 +230,7 @@ function serveLocalFile(
 ): void {
   const pkg = metadata.getPackage(packageName, 'pypi');
   if (pkg) {
-    metadata.incrementVersionDownload(
+    metadata.recordDownload(
       metadata.getOrCreatePackage(packageName, 'pypi', pkg.source),
       version
     );
@@ -255,8 +255,8 @@ function serveAndCache(
 
   cache.writeFile(cachePath, response.body);
   const pkgId = metadata.getOrCreatePackage(packageName, 'pypi', 'cache');
-  metadata.addVersion(pkgId, version, response.body.length, cachePath);
-  metadata.incrementVersionDownload(pkgId, version);
+  metadata.registerVersion(pkgId, version, response.body.length, cachePath, undefined, true);
+  metadata.recordDownload(pkgId, version);
 
   res.setHeader('Content-Length', response.body.length.toString());
   res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');

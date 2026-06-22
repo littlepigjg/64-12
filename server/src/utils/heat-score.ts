@@ -10,6 +10,8 @@ export function calculateHeatScore(
   maxDownloads: number,
   policy: HeatScorePolicy
 ): number {
+  if (lastAccessedAt === 0 && downloadCount === 0) return 0;
+
   const now = Date.now();
   const daysSinceAccess = (now - lastAccessedAt) / (24 * 60 * 60 * 1000);
 
