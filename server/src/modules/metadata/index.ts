@@ -16,6 +16,7 @@ interface DBPackage {
   latestVersion: string;
   createdAt: number;
   updatedAt: number;
+  lastAccessedAt: number;
   totalSize: number;
   downloadCount: number;
 }
@@ -28,6 +29,7 @@ interface DBVersion {
   filePath: string;
   sha1?: string;
   publishedAt: number;
+  lastAccessedAt: number;
   downloadCount: number;
 }
 
@@ -44,6 +46,10 @@ const DEFAULT_POLICY: CachePolicy = {
   maxSizeGB: 50,
   maxAgeDays: 90,
   autoClean: true,
+  evictionStrategy: 'heat-based',
+  frequencyWeight: 0.5,
+  recencyWeight: 0.5,
+  heatHalfLifeDays: 30,
 };
 
 export class MetadataIndex {
@@ -64,13 +70,31 @@ export class MetadataIndex {
       try {
         const raw = fs.readFileSync(this.dbPath, 'utf-8');
         const parsed = JSON.parse(raw);
+        const now = Date.now();
+
+        const packages = (parsed.packages || []).map((p: any) => ({
+          ...p,
+          lastAccessedAt: p.lastAccessedAt || p.updatedAt || now,
+        }));
+
+        const versions = (parsed.versions || []).map((v: any) => ({
+          ...v,
+          lastAccessedAt: v.lastAccessedAt || v.publishedAt || now,
+        }));
+
+        const cachePolicy = {
+          ...DEFAULT_POLICY,
+          ...config.cache,
+          ...(parsed.cachePolicy || {}),
+        };
+
         return {
           nextPackageId: parsed.nextPackageId || 1,
           nextVersionId: parsed.nextVersionId || 1,
-          packages: parsed.packages || [],
-          versions: parsed.versions || [],
+          packages,
+          versions,
           storageTrend: parsed.storageTrend || [],
-          cachePolicy: parsed.cachePolicy || { ...DEFAULT_POLICY, ...config.cache },
+          cachePolicy,
         };
       } catch {
         // fall through to default
@@ -123,6 +147,7 @@ export class MetadataIndex {
       latestVersion: '',
       createdAt: now,
       updatedAt: now,
+      lastAccessedAt: now,
       totalSize: 0,
       downloadCount: 0,
     });
@@ -165,6 +190,7 @@ export class MetadataIndex {
       existing.filePath = filePath;
       if (sha1) existing.sha1 = sha1;
       existing.publishedAt = now;
+      existing.lastAccessedAt = now;
     } else {
       const id = this.db.nextVersionId++;
       this.db.versions.push({
@@ -175,6 +201,7 @@ export class MetadataIndex {
         filePath,
         sha1,
         publishedAt: now,
+        lastAccessedAt: now,
         downloadCount: 0,
       });
     }
@@ -197,12 +224,19 @@ export class MetadataIndex {
   }
 
   incrementVersionDownload(packageId: number, version: string): void {
+    const now = Date.now();
     const v = this.db.versions.find(
       (v) => v.packageId === packageId && v.version === version
     );
-    if (v) v.downloadCount++;
+    if (v) {
+      v.downloadCount++;
+      v.lastAccessedAt = now;
+    }
     const pkg = this.db.packages.find((p) => p.id === packageId);
-    if (pkg) pkg.downloadCount++;
+    if (pkg) {
+      pkg.downloadCount++;
+      pkg.lastAccessedAt = now;
+    }
     this.scheduleSave();
   }
 
@@ -221,6 +255,7 @@ export class MetadataIndex {
         filePath: v.filePath,
         sha1: v.sha1,
         publishedAt: v.publishedAt,
+        lastAccessedAt: v.lastAccessedAt,
         downloadCount: v.downloadCount,
       }));
 
@@ -235,6 +270,7 @@ export class MetadataIndex {
       latestVersion: pkg.latestVersion,
       createdAt: pkg.createdAt,
       updatedAt: pkg.updatedAt,
+      lastAccessedAt: pkg.lastAccessedAt,
       totalSize: pkg.totalSize,
       downloadCount: pkg.downloadCount,
       versions,
@@ -300,6 +336,7 @@ export class MetadataIndex {
       latestVersion: pkg.latestVersion,
       createdAt: pkg.createdAt,
       updatedAt: pkg.updatedAt,
+      lastAccessedAt: pkg.lastAccessedAt,
       totalSize: pkg.totalSize,
       downloadCount: pkg.downloadCount,
       versions: (versionsByPkg[pkg.id] || []).map<PackageVersion>((v) => ({
@@ -308,6 +345,7 @@ export class MetadataIndex {
         filePath: v.filePath,
         sha1: v.sha1,
         publishedAt: v.publishedAt,
+        lastAccessedAt: v.lastAccessedAt,
         downloadCount: v.downloadCount,
       })),
     }));
@@ -420,33 +458,103 @@ export class MetadataIndex {
     const result: Array<{ name: string; registry: RegistryType; filePath: string }> = [];
     for (const v of this.db.versions) {
       const pkg = pkgMap.get(v.packageId);
-      if (pkg && pkg.updatedAt < cutoff && pkg.source === 'cache') {
+      if (pkg && pkg.lastAccessedAt < cutoff && pkg.source === 'cache') {
         result.push({ name: pkg.name, registry: pkg.registry, filePath: v.filePath });
       }
     }
     return result;
   }
 
-  getPackagesForEviction(neededBytes: number): Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number }> {
+  private calculateHeatScore(
+    downloadCount: number,
+    lastAccessedAt: number,
+    maxDownloads: number,
+    policy: CachePolicy
+  ): number {
+    const now = Date.now();
+    const daysSinceAccess = (now - lastAccessedAt) / (24 * 60 * 60 * 1000);
+
+    const frequencyScore = maxDownloads > 0
+      ? Math.log(downloadCount + 1) / Math.log(maxDownloads + 1)
+      : 0;
+
+    const recencyScore = Math.pow(2, -daysSinceAccess / policy.heatHalfLifeDays);
+
+    const totalWeight = policy.frequencyWeight + policy.recencyWeight;
+    if (totalWeight <= 0) return 0;
+
+    const heatScore = (
+      policy.frequencyWeight * frequencyScore +
+      policy.recencyWeight * recencyScore
+    ) / totalWeight;
+
+    return heatScore;
+  }
+
+  getPackagesForEviction(neededBytes: number): Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number; heatScore?: number }> {
+    const policy = this.db.cachePolicy;
     const pkgMap = new Map(this.db.packages.map((p) => [p.id, p]));
+
+    if (policy.evictionStrategy === 'time-based') {
+      const rows = this.db.versions
+        .map((v) => {
+          const pkg = pkgMap.get(v.packageId)!;
+          return {
+            name: pkg.name,
+            registry: pkg.registry,
+            version: v.version,
+            filePath: v.filePath,
+            size: v.size,
+            _downloads: pkg.downloadCount,
+            _updated: pkg.updatedAt,
+            _isCache: pkg.source === 'cache',
+          };
+        })
+        .filter((r) => r._isCache)
+        .sort((a, b) => a._downloads - b._downloads || a._updated - b._updated);
+
+      const result: Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number }> = [];
+      let acc = 0;
+      for (const r of rows) {
+        result.push({
+          name: r.name,
+          registry: r.registry,
+          version: r.version,
+          filePath: r.filePath,
+          size: r.size,
+        });
+        acc += r.size;
+        if (acc >= neededBytes) break;
+      }
+      return result;
+    }
+
+    const cachePackages = this.db.packages.filter((p) => p.source === 'cache');
+    const maxDownloads = cachePackages.reduce((max, p) => Math.max(max, p.downloadCount), 0);
+
     const rows = this.db.versions
       .map((v) => {
         const pkg = pkgMap.get(v.packageId)!;
+        const heatScore = this.calculateHeatScore(
+          pkg.downloadCount,
+          v.lastAccessedAt,
+          maxDownloads,
+          policy
+        );
         return {
           name: pkg.name,
           registry: pkg.registry,
           version: v.version,
           filePath: v.filePath,
           size: v.size,
-          _downloads: pkg.downloadCount,
-          _updated: pkg.updatedAt,
+          heatScore,
           _isCache: pkg.source === 'cache',
         };
       })
       .filter((r) => r._isCache)
-      .sort((a, b) => a._downloads - b._downloads || a._updated - b._updated);
+      .sort((a, b) => a.heatScore - b.heatScore);
 
-    const result: Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number }> = [];
+    const result: Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number; heatScore: number }> = [];
     let acc = 0;
     for (const r of rows) {
       result.push({
@@ -455,6 +563,7 @@ export class MetadataIndex {
         version: r.version,
         filePath: r.filePath,
         size: r.size,
+        heatScore: r.heatScore,
       });
       acc += r.size;
       if (acc >= neededBytes) break;

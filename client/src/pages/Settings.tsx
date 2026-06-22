@@ -9,6 +9,10 @@ import {
   Play,
   CheckCircle2,
   Database,
+  Flame,
+  BarChart3,
+  Timer,
+  Gauge,
 } from 'lucide-react';
 import { api } from '../api';
 import type { CachePolicy, HealthInfo } from '../types';
@@ -140,6 +144,151 @@ export default function Settings() {
               </label>
             </div>
 
+            <div className="pt-4 border-t border-slate-200">
+              <h3 className="text-md font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                <Flame size={18} className="text-orange-500" /> 智能淘汰策略
+              </h3>
+
+              <div className="space-y-5">
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-3">
+                    <Gauge size={16} className="text-slate-400" /> 淘汰算法
+                  </label>
+                  <div className="flex gap-3">
+                    <label
+                      className={`flex-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                        policy.evictionStrategy === 'time-based'
+                          ? 'border-indigo-500 bg-indigo-50'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        className="sr-only"
+                        name="evictionStrategy"
+                        value="time-based"
+                        checked={policy.evictionStrategy === 'time-based'}
+                        onChange={(e) =>
+                          setPolicy({ ...policy, evictionStrategy: e.target.value as 'time-based' | 'heat-based' })
+                        }
+                      />
+                      <div className="text-sm font-medium text-slate-700">传统模式</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        按下载量和更新时间排序，优先淘汰旧的、少用的包
+                      </div>
+                    </label>
+
+                    <label
+                      className={`flex-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                        policy.evictionStrategy === 'heat-based'
+                          ? 'border-indigo-500 bg-indigo-50'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        className="sr-only"
+                        name="evictionStrategy"
+                        value="heat-based"
+                        checked={policy.evictionStrategy === 'heat-based'}
+                        onChange={(e) =>
+                          setPolicy({ ...policy, evictionStrategy: e.target.value as 'time-based' | 'heat-based' })
+                        }
+                      />
+                      <div className="text-sm font-medium text-slate-700 flex items-center gap-1">
+                        <Flame size={14} className="text-orange-500" /> 热度模式
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        基于访问频率和最近访问时间计算热度，优先淘汰低热度包
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {policy.evictionStrategy === 'heat-based' && (
+                  <>
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                          <BarChart3 size={16} className="text-slate-400" /> 频率权重
+                        </label>
+                        <span className="text-sm font-semibold text-indigo-600">
+                          {Math.round(policy.frequencyWeight * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={policy.frequencyWeight}
+                        onChange={(e) =>
+                          setPolicy({ ...policy, frequencyWeight: parseFloat(e.target.value) })
+                        }
+                      />
+                      <p className="text-xs text-slate-500 mt-1.5">
+                        访问次数在热度计算中的占比。权重越高，越倾向于保留下载量大的包
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                          <Timer size={16} className="text-slate-400" /> 时间权重
+                        </label>
+                        <span className="text-sm font-semibold text-indigo-600">
+                          {Math.round(policy.recencyWeight * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={policy.recencyWeight}
+                        onChange={(e) =>
+                          setPolicy({ ...policy, recencyWeight: parseFloat(e.target.value) })
+                        }
+                      />
+                      <p className="text-xs text-slate-500 mt-1.5">
+                        最近访问时间在热度计算中的占比。权重越高，越倾向于保留最近使用的包
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                        <Clock size={16} className="text-slate-400" /> 热度半衰期 (天)
+                      </label>
+                      <input
+                        type="number"
+                        className="input max-w-xs"
+                        min={1}
+                        step={1}
+                        value={policy.heatHalfLifeDays}
+                        onChange={(e) =>
+                          setPolicy({ ...policy, heatHalfLifeDays: parseInt(e.target.value, 10) || 30 })
+                        }
+                      />
+                      <p className="text-xs text-slate-500 mt-1.5">
+                        热度随时间衰减的速度。半衰期越长，历史访问记录的影响越持久
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-lg bg-gradient-to-r from-indigo-50 to-orange-50 border border-indigo-200">
+                      <div className="text-sm font-medium text-slate-700 mb-2">📊 热度计算公式</div>
+                      <div className="text-xs text-slate-600 space-y-1">
+                        <p>• 频率分 = log(下载次数 + 1) / log(最大下载次数 + 1)</p>
+                        <p>• 时间分 = 2^(-距今天数 / 半衰期)</p>
+                        <p>• 热度分 = (频率权重 × 频率分 + 时间权重 × 时间分) / 权重和</p>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
             <div className="flex items-center gap-3 pt-2">
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
                 {saving && <Loader2 size={16} className="animate-spin" />}
@@ -166,8 +315,12 @@ export default function Settings() {
             <div className="text-sm text-amber-800">
               <p className="font-medium">清理会根据当前策略删除：</p>
               <ul className="list-disc ml-4 mt-1 space-y-0.5">
-                <li>超过过期天数未使用的缓存包</li>
-                <li>超出存储上限部分中最久未被使用的缓存</li>
+                <li>超过过期天数未被访问的缓存包</li>
+                <li>
+                  {policy?.evictionStrategy === 'heat-based'
+                    ? '超出存储上限部分中热度最低的缓存'
+                    : '超出存储上限部分中最久未被使用的缓存'}
+                </li>
                 <li><strong>私有包不会被清理</strong>，仅清理代理缓存</li>
               </ul>
             </div>

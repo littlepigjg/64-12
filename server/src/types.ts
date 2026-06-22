@@ -14,6 +14,7 @@ export interface PackageInfo {
   scope?: string;
   createdAt: number;
   updatedAt: number;
+  lastAccessedAt: number;
   totalSize: number;
   downloadCount: number;
 }
@@ -24,6 +25,7 @@ export interface PackageVersion {
   filePath: string;
   sha1?: string;
   publishedAt: number;
+  lastAccessedAt: number;
   downloadCount: number;
 }
 
@@ -49,4 +51,8 @@ export interface CachePolicy {
   maxSizeGB: number;
   maxAgeDays: number;
   autoClean: boolean;
+  evictionStrategy: 'time-based' | 'heat-based';
+  frequencyWeight: number;
+  recencyWeight: number;
+  heatHalfLifeDays: number;
 }

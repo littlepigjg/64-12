@@ -145,11 +145,32 @@ router.get('/cache/policy', (_req: Request, res: Response) => {
 router.put('/cache/policy', (req: Request, res: Response) => {
   const metadata = getMetadataIndex();
   const body = req.body || {};
+  const currentPolicy = metadata.getCachePolicy();
+
+  const evictionStrategy = body.evictionStrategy === 'time-based' || body.evictionStrategy === 'heat-based'
+    ? body.evictionStrategy
+    : currentPolicy.evictionStrategy;
+
+  const frequencyWeight = typeof body.frequencyWeight === 'number'
+    ? Math.max(0, Math.min(1, body.frequencyWeight))
+    : currentPolicy.frequencyWeight;
+
+  const recencyWeight = typeof body.recencyWeight === 'number'
+    ? Math.max(0, Math.min(1, body.recencyWeight))
+    : currentPolicy.recencyWeight;
+
+  const heatHalfLifeDays = typeof body.heatHalfLifeDays === 'number'
+    ? Math.max(1, body.heatHalfLifeDays)
+    : currentPolicy.heatHalfLifeDays;
 
   const policy = {
-    maxSizeGB: typeof body.maxSizeGB === 'number' ? Math.max(0.1, body.maxSizeGB) : 50,
-    maxAgeDays: typeof body.maxAgeDays === 'number' ? Math.max(0, body.maxAgeDays) : 90,
-    autoClean: typeof body.autoClean === 'boolean' ? body.autoClean : true,
+    maxSizeGB: typeof body.maxSizeGB === 'number' ? Math.max(0.1, body.maxSizeGB) : currentPolicy.maxSizeGB,
+    maxAgeDays: typeof body.maxAgeDays === 'number' ? Math.max(0, body.maxAgeDays) : currentPolicy.maxAgeDays,
+    autoClean: typeof body.autoClean === 'boolean' ? body.autoClean : currentPolicy.autoClean,
+    evictionStrategy,
+    frequencyWeight,
+    recencyWeight,
+    heatHalfLifeDays,
   };
 
   metadata.updateCachePolicy(policy);

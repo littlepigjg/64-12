@@ -16,6 +16,10 @@ export const config = {
     maxSizeGB: parseFloat(process.env.CACHE_MAX_SIZE_GB || '50'),
     maxAgeDays: parseInt(process.env.CACHE_MAX_AGE_DAYS || '90', 10),
     autoClean: process.env.CACHE_AUTO_CLEAN !== 'false',
+    evictionStrategy: (process.env.CACHE_EVICTION_STRATEGY || 'heat-based') as 'time-based' | 'heat-based',
+    frequencyWeight: parseFloat(process.env.CACHE_FREQUENCY_WEIGHT || '0.5'),
+    recencyWeight: parseFloat(process.env.CACHE_RECENCY_WEIGHT || '0.5'),
+    heatHalfLifeDays: parseInt(process.env.CACHE_HEAT_HALF_LIFE_DAYS || '30', 10),
   },
   auth: {
     requireAuth: process.env.REQUIRE_AUTH === 'true',
