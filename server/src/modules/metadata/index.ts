@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ensureDir, formatDate, getDirSize } from '../../utils';
+import { calculateHeatScore, calculateHeatScores } from '../../utils/heat-score';
 import { config } from '../../config';
 import type { PackageInfo, PackageVersion, CacheStats, StorageTrend, CachePolicy, RegistryType, PackageSource } from '../../types';
 
@@ -458,64 +459,44 @@ export class MetadataIndex {
     const result: Array<{ name: string; registry: RegistryType; filePath: string }> = [];
     for (const v of this.db.versions) {
       const pkg = pkgMap.get(v.packageId);
-      if (pkg && pkg.lastAccessedAt < cutoff && pkg.source === 'cache') {
+      if (pkg && v.lastAccessedAt < cutoff && pkg.source === 'cache') {
         result.push({ name: pkg.name, registry: pkg.registry, filePath: v.filePath });
       }
     }
     return result;
   }
 
-  private calculateHeatScore(
-    downloadCount: number,
-    lastAccessedAt: number,
-    maxDownloads: number,
-    policy: CachePolicy
-  ): number {
-    const now = Date.now();
-    const daysSinceAccess = (now - lastAccessedAt) / (24 * 60 * 60 * 1000);
-
-    const frequencyScore = maxDownloads > 0
-      ? Math.log(downloadCount + 1) / Math.log(maxDownloads + 1)
-      : 0;
-
-    const recencyScore = Math.pow(2, -daysSinceAccess / policy.heatHalfLifeDays);
-
-    const totalWeight = policy.frequencyWeight + policy.recencyWeight;
-    if (totalWeight <= 0) return 0;
-
-    const heatScore = (
-      policy.frequencyWeight * frequencyScore +
-      policy.recencyWeight * recencyScore
-    ) / totalWeight;
-
-    return heatScore;
-  }
-
   getPackagesForEviction(neededBytes: number): Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number; heatScore?: number }> {
     const policy = this.db.cachePolicy;
     const pkgMap = new Map(this.db.packages.map((p) => [p.id, p]));
 
+    const cacheVersions = this.db.versions.filter((v) => {
+      const pkg = pkgMap.get(v.packageId);
+      return pkg && pkg.source === 'cache';
+    });
+
+    const versionRows = cacheVersions.map((v) => {
+      const pkg = pkgMap.get(v.packageId)!;
+      return {
+        name: pkg.name,
+        registry: pkg.registry,
+        version: v.version,
+        filePath: v.filePath,
+        size: v.size,
+        downloadCount: v.downloadCount,
+        lastAccessedAt: v.lastAccessedAt,
+        _pkgDownloads: pkg.downloadCount,
+        _pkgUpdated: pkg.updatedAt,
+      };
+    });
+
     if (policy.evictionStrategy === 'time-based') {
-      const rows = this.db.versions
-        .map((v) => {
-          const pkg = pkgMap.get(v.packageId)!;
-          return {
-            name: pkg.name,
-            registry: pkg.registry,
-            version: v.version,
-            filePath: v.filePath,
-            size: v.size,
-            _downloads: pkg.downloadCount,
-            _updated: pkg.updatedAt,
-            _isCache: pkg.source === 'cache',
-          };
-        })
-        .filter((r) => r._isCache)
-        .sort((a, b) => a._downloads - b._downloads || a._updated - b._updated);
+      const sorted = versionRows
+        .sort((a, b) => a._pkgDownloads - b._pkgDownloads || a._pkgUpdated - b._pkgUpdated);
 
       const result: Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number }> = [];
       let acc = 0;
-      for (const r of rows) {
+      for (const r of sorted) {
         result.push({
           name: r.name,
           registry: r.registry,
@@ -529,34 +510,16 @@ export class MetadataIndex {
       return result;
     }
 
-    const cachePackages = this.db.packages.filter((p) => p.source === 'cache');
-    const maxDownloads = cachePackages.reduce((max, p) => Math.max(max, p.downloadCount), 0);
-
-    const rows = this.db.versions
-      .map((v) => {
-        const pkg = pkgMap.get(v.packageId)!;
-        const heatScore = this.calculateHeatScore(
-          pkg.downloadCount,
-          v.lastAccessedAt,
-          maxDownloads,
-          policy
-        );
-        return {
-          name: pkg.name,
-          registry: pkg.registry,
-          version: v.version,
-          filePath: v.filePath,
-          size: v.size,
-          heatScore,
-          _isCache: pkg.source === 'cache',
-        };
-      })
-      .filter((r) => r._isCache)
-      .sort((a, b) => a.heatScore - b.heatScore);
+    const scored = calculateHeatScores(
+      versionRows,
+      (v) => v.downloadCount,
+      (v) => v.lastAccessedAt,
+      policy
+    ).sort((a, b) => a.heatScore - b.heatScore);
 
     const result: Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number; heatScore: number }> = [];
     let acc = 0;
-    for (const r of rows) {
+    for (const r of scored) {
       result.push({
         name: r.name,
         registry: r.registry,
