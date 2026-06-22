@@ -180,9 +180,11 @@ export class MetadataStore {
     return id;
   }
 
-  upsertPackageInfo(info: Partial<{ name: string; registry: RegistryType; description?: string; author?: string; license?: string; latestVersion?: string; source?: PackageSource; scope?: string }> & { name: string; registry: RegistryType }): void {
+  upsertPackageInfo(
+    info: Partial<{ name: string; registry: RegistryType; description?: string; author?: string; license?: string; latestVersion?: string; source?: PackageSource; scope?: string }> & { name: string; registry: RegistryType },
+    updateTimestamp: boolean = false
+  ): void {
     const existing = this.findPackageByName(info.name, info.registry);
-    const now = Date.now();
 
     if (existing) {
       if (info.description !== undefined) existing.description = info.description;
@@ -190,7 +192,7 @@ export class MetadataStore {
       if (info.license !== undefined) existing.license = info.license;
       if (info.latestVersion !== undefined) existing.latestVersion = info.latestVersion;
       if (info.source !== undefined) existing.source = info.source;
-      existing.updatedAt = now;
+      if (updateTimestamp) existing.updatedAt = Date.now();
     } else {
       this.getOrCreatePackage(info.name, info.registry, info.source || 'cache', info.scope);
     }
@@ -224,7 +226,7 @@ export class MetadataStore {
         size,
         filePath,
         sha1,
-        publishedAt: now,
+        publishedAt: isDownload ? now : 0,
         lastAccessedAt: isDownload ? now : 0,
         downloadCount: 0,
       });
@@ -233,11 +235,9 @@ export class MetadataStore {
     this.recalcPackageSize(packageId);
 
     const pkg = this.findPackageById(packageId);
-    if (pkg) {
+    if (pkg && isDownload) {
       pkg.updatedAt = now;
-      if (isDownload) {
-        pkg.lastAccessedAt = now;
-      }
+      pkg.lastAccessedAt = now;
     }
 
     this.scheduleSave();

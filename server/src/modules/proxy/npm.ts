@@ -377,7 +377,7 @@ async function handlePublishNpmPackage(packageName: string, req: Request, res: R
     latestVersion: version,
     source: 'private',
     scope,
-  });
+  }, true);
   metadata.registerVersion(pkgId, version, tarballBuffer.length, filePath, sha1, true);
 
   res.json({

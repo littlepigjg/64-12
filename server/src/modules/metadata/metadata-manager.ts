@@ -200,7 +200,15 @@ export class MetadataManager extends MetadataStore {
 
     if (policy.evictionStrategy === 'time-based') {
       const sorted = versionRows
-        .sort((a, b) => a._pkgDownloads - b._pkgDownloads || a._pkgUpdated - b._pkgUpdated);
+        .sort((a, b) => {
+          const aNever = a.lastAccessedAt === 0;
+          const bNever = b.lastAccessedAt === 0;
+          if (aNever && !bNever) return -1;
+          if (!aNever && bNever) return 1;
+          if (aNever && bNever) return a.downloadCount - b.downloadCount;
+          if (a.lastAccessedAt !== b.lastAccessedAt) return a.lastAccessedAt - b.lastAccessedAt;
+          return a.downloadCount - b.downloadCount;
+        });
 
       const result: Array<{ name: string; registry: RegistryType; version: string; filePath: string; size: number }> = [];
       let acc = 0;
